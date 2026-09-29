@@ -4,3 +4,6 @@ venv/
 *.pyc
 .idea/
 .vscode/
+
+/generated/prisma
+data/ai_conversations.json

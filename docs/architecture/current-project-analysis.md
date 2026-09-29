@@ -2,7 +2,7 @@
 
 ## Existing Architecture
 
-ProcureAI is a Flask application with a JSON persistence layer. The domain engines live in `services/`: vendor scoring, risk analysis, approval rules, AI explanations, and Odoo integration. Purchase requests are stored in `data/purchase_requests.json` through `data/db.py`.
+PROCUREAI is a Flask application with a JSON persistence layer and a migration-ready PostgreSQL/Prisma schema. The domain engines live in `services/`: vendor scoring, risk analysis, approval rules, AI explanations, and Odoo integration. Purchase requests currently run through `data/purchase_requests.json` and `data/db.py`; the Prisma schema defines the target relational source of truth.
 
 The original UI was server-rendered Jinja templates using Bootstrap, Font Awesome, Chart.js, and inline JavaScript. A first modernization introduced a lightweight SPA in `static/js/app.js` and `static/css/app.css`, while retaining legacy routes and templates for compatibility.
 

@@ -1,11 +1,14 @@
 from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, session
 from datetime import datetime
+import requests
 from config import Config
 from services.odoo_client import OdooClient
 from services.vendor_scoring import VendorScoringEngine
 from services.risk_engine import ProcurementRiskEngine
 from services.ai_service import AIService
 from services.approval_engine import ApprovalEngine
+from services.ai_assistant import chat as assistant_chat, conversations_for
+from services.location import get_location_provider
 from data.seed_data import MOCK_QUOTATIONS
 from data.db import load_prs, save_prs
 
@@ -13,6 +16,16 @@ MOCK_PURCHASE_REQUESTS = load_prs()
 app = Flask(__name__)
 app.config.from_object(Config)
 app.secret_key = app.config.get('SECRET_KEY', 'default-dev-secret')
+
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get('Origin')
+    if origin in Config.CORS_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        response.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+    return response
 
 odoo = OdooClient()
 
@@ -38,6 +51,12 @@ scoring_engine = VendorScoringEngine()
 
 def find_pr(pr_id):
     return next((pr for pr in MOCK_PURCHASE_REQUESTS if pr['id'] == pr_id), None)
+
+def visible_prs(user):
+    if user and user.get('role') != 'EMPLOYEE':
+        return MOCK_PURCHASE_REQUESTS
+    email = user.get('email') if user else None
+    return [pr for pr in MOCK_PURCHASE_REQUESTS if pr.get('created_by') == email]
 
 def build_comparison(pr):
     quotation = MOCK_QUOTATIONS[0]
@@ -185,6 +204,7 @@ def pr_create():
             "delivery_date": delivery_date,
             "priority": priority,
             "description": description,
+            "created_by": get_current_user().get('email'),
             "status": "ANALYZING"
         }
         # Insert at the beginning so newest shows first
@@ -461,7 +481,7 @@ def api_dashboard():
             'po_created': sum(pr['status'] == 'PO_CREATED' for pr in MOCK_PURCHASE_REQUESTS),
             'total_spend': sum(order.get('amount_total', 0) for order in orders)
         },
-        'recent_requests': MOCK_PURCHASE_REQUESTS[:5],
+        'recent_requests': visible_prs(get_current_user())[:5],
         'recent_orders': orders[:5],
         'top_vendors': sorted(vendors, key=lambda item: item['overall_score'], reverse=True)[:5]
     })
@@ -469,7 +489,7 @@ def api_dashboard():
 @app.route('/api/purchase-requests', methods=['GET', 'POST'])
 def api_purchase_requests():
     if request.method == 'GET':
-        return jsonify(MOCK_PURCHASE_REQUESTS)
+        return jsonify(visible_prs(get_current_user()))
     data = request.get_json(silent=True) or {}
     required = ['product', 'quantity', 'budget', 'delivery_date']
     if any(not str(data.get(field, '')).strip() for field in required):
@@ -486,7 +506,8 @@ def api_purchase_requests():
         'product': str(data['product']).strip(), 'category': data.get('category', 'Other'),
         'quantity': quantity, 'budget': budget, 'delivery_date': data['delivery_date'],
         'priority': data.get('priority', 'Medium'), 'description': data.get('description', '').strip(),
-        'status': 'ANALYZING'
+        'status': 'ANALYZING',
+        'created_by': get_current_user().get('email')
     }
     MOCK_PURCHASE_REQUESTS.insert(0, new_pr)
     save_prs(MOCK_PURCHASE_REQUESTS)
@@ -495,12 +516,14 @@ def api_purchase_requests():
 @app.route('/api/purchase-requests/<pr_id>')
 def api_purchase_request(pr_id):
     pr = find_pr(pr_id)
+    if pr and pr not in visible_prs(get_current_user()):
+        pr = None
     return jsonify(pr) if pr else (jsonify({'success': False, 'error': 'Not found'}), 404)
 
 @app.route('/api/purchase-requests/<pr_id>/analyze', methods=['POST'])
 def api_analyze_request(pr_id):
     pr = find_pr(pr_id)
-    if not pr:
+    if not pr or pr not in visible_prs(get_current_user()):
         return jsonify({'success': False, 'error': 'Not found'}), 404
     build_comparison(pr)
     if pr['status'] == 'ANALYZING':
@@ -511,7 +534,7 @@ def api_analyze_request(pr_id):
 @app.route('/api/purchase-requests/<pr_id>/comparison')
 def api_comparison(pr_id):
     pr = find_pr(pr_id)
-    if not pr:
+    if not pr or pr not in visible_prs(get_current_user()):
         return jsonify({'success': False, 'error': 'Not found'}), 404
     return jsonify(serialize_comparison(pr))
 
@@ -536,6 +559,80 @@ def api_vendor_performance():
         )) / 5, 1)
     return jsonify(sorted(vendors, key=lambda item: item['overall'], reverse=True))
 
+@app.route('/api/purchase-orders')
+def api_purchase_orders():
+    if get_current_user().get('role') == 'EMPLOYEE':
+        return jsonify([])
+    return jsonify(odoo.get_purchase_orders(limit=200))
+
+@app.route('/api/analytics')
+def api_analytics():
+    orders = odoo.get_purchase_orders(limit=200)
+    vendors = odoo.get_vendors()
+    return jsonify({
+        'spend': sum(order.get('amount_total', 0) for order in orders),
+        'purchase_order_count': len(orders),
+        'request_count': len(visible_prs(get_current_user())),
+        'vendor_count': len(vendors),
+        'risk_distribution': {
+            'low': sum(1 for vendor in vendors if vendor.get('reliability', 100) >= 80),
+            'attention': sum(1 for vendor in vendors if vendor.get('reliability', 100) < 80)
+        }
+    })
+
+@app.route('/api/notifications')
+def api_notifications():
+    pending = [pr for pr in visible_prs(get_current_user()) if pr.get('status') == 'PENDING_APPROVAL']
+    return jsonify([{
+        'type': 'approval',
+        'priority': 'high',
+        'message': f"{pr['id']} requires approval",
+        'route': f"/dashboard#detail/{pr['id']}"
+    } for pr in pending])
+
+@app.route('/api/integrations/status')
+def api_integrations_status():
+    return jsonify({
+        'database_configured': bool(Config.DATABASE_URL),
+        'database_backend': Config.DATABASE_BACKEND,
+        'ai_provider': Config.AI_PROVIDER,
+        'gemini_configured': bool(Config.GEMINI_API_KEY),
+        'maps_configured': bool(Config.GOOGLE_MAPS_API_KEY),
+        'odoo_demo_mode': Config.DEMO_MODE,
+        'backend_url': Config.API_URL
+    })
+
+@app.route('/api/ai/chat', methods=['POST'])
+def api_ai_chat():
+    data = request.get_json(silent=True) or {}
+    message = str(data.get('message', '')).strip()
+    if not message:
+        return jsonify({'success': False, 'error': 'Message is required.'}), 400
+    return jsonify({'success': True, **assistant_chat(get_current_user(), message, data.get('conversationId'))})
+
+@app.route('/api/ai/conversations')
+def api_ai_conversations():
+    return jsonify(conversations_for(get_current_user()))
+
+@app.route('/api/vendors/search')
+def api_vendor_search():
+    query = request.args.get('query', '').strip()
+    location = request.args.get('location', '').strip()
+    if not query or not location:
+        return jsonify({'success': False, 'error': 'Query and location are required.'}), 400
+    try:
+        results = get_location_provider().search_vendors(query, location, request.args.get('radius'))
+        deduped = {item.get('place_id') or item.get('name'): item for item in results}
+        if Config.DATABASE_BACKEND == 'postgres':
+            try:
+                from data.postgres_db import save_vendor_search
+                save_vendor_search(get_current_user().get('email'), query, location, Config.LOCATION_PROVIDER, list(deduped.values()))
+            except Exception:
+                pass
+        return jsonify({'success': True, 'results': list(deduped.values())})
+    except (ValueError, RuntimeError, requests.RequestException) as error:
+        return jsonify({'success': False, 'error': str(error)}), 502
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -559,4 +656,4 @@ def logout():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(host=Config.BACKEND_HOST, port=Config.BACKEND_PORT, debug=Config.DEBUG)

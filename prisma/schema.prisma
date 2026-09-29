@@ -1,0 +1,234 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model ProcurePurchaseRequest {
+  id        String   @id
+  payload   Json
+  updatedAt DateTime @map("updated_at")
+
+  @@map("procure_purchase_requests")
+}
+
+model ProcureAIConversation {
+  id        String   @id
+  userId    String   @map("user_id")
+  payload   Json
+  updatedAt DateTime @map("updated_at")
+
+  @@map("procure_ai_conversations")
+}
+
+model ProcureAIAction {
+  id             String   @id
+  userId         String   @map("user_id")
+  conversationId String?  @map("conversation_id")
+  payload        Json
+  createdAt      DateTime @map("created_at")
+
+  @@map("procure_ai_actions")
+}
+
+model ProcureVendorSearch {
+  id        String   @id
+  userId    String?
+  payload   Json
+  createdAt DateTime @map("created_at")
+
+  @@map("procure_vendor_searches")
+}
+
+model Organization {
+  id        String            @id @default(cuid())
+  name      String
+  users     User[]
+  vendors   Vendor[]
+  requests  PurchaseRequest[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+}
+
+model User {
+  id             String             @id @default(cuid())
+  email          String             @unique
+  name           String
+  role           String
+  organizationId String?
+  organization   Organization?      @relation(fields: [organizationId], references: [id])
+  requests       PurchaseRequest[]
+  conversations  ChatConversation[]
+  aiActions      AIActionLog[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+}
+
+model Vendor {
+  id                   String            @id @default(cuid())
+  organizationId       String?
+  organization         Organization?     @relation(fields: [organizationId], references: [id])
+  externalPlaceId      String?
+  name                 String
+  category             String?
+  description          String?
+  address              String?
+  city                 String?
+  state                String?
+  country              String?
+  latitude             Float?
+  longitude            Float?
+  phone                String?
+  email                String?
+  website              String?
+  rating               Float?
+  reviewCount          Int?
+  reliability          Float?
+  deliveryPerformance  Float?
+  accuracy             Float?
+  priceCompetitiveness Float?
+  source               String?
+  locations            VendorLocation[]
+  requests             PurchaseRequest[]
+  purchaseOrders       PurchaseOrder[]
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  @@unique([source, externalPlaceId])
+}
+
+model VendorLocation {
+  id        String  @id @default(cuid())
+  vendorId  String
+  vendor    Vendor  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  address   String?
+  city      String?
+  state     String?
+  latitude  Float?
+  longitude Float?
+}
+
+model PurchaseRequest {
+  id               String         @id
+  organizationId   String?
+  organization     Organization?  @relation(fields: [organizationId], references: [id])
+  createdById      String?
+  createdBy        User?          @relation(fields: [createdById], references: [id])
+  product          String
+  category         String?
+  quantity         Int
+  budget           Float
+  deliveryDate     DateTime
+  priority         String?
+  description      String?
+  status           String
+  selectedVendorId String?
+  selectedVendor   Vendor?        @relation(fields: [selectedVendorId], references: [id])
+  items            RequestItem[]
+  purchaseOrder    PurchaseOrder?
+  approvals        Approval[]
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+}
+
+model RequestItem {
+  id        String          @id @default(cuid())
+  requestId String
+  request   PurchaseRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  product   String
+  quantity  Int
+  budget    Float?
+}
+
+model PurchaseOrder {
+  id          String              @id @default(cuid())
+  externalId  String?             @unique
+  requestId   String              @unique
+  request     PurchaseRequest     @relation(fields: [requestId], references: [id])
+  vendorId    String?
+  vendor      Vendor?             @relation(fields: [vendorId], references: [id])
+  status      String
+  totalAmount Float
+  items       PurchaseOrderItem[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+}
+
+model PurchaseOrderItem {
+  id        String        @id @default(cuid())
+  orderId   String
+  order     PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   String
+  quantity  Int
+  unitPrice Float
+}
+
+model Approval {
+  id         String          @id @default(cuid())
+  requestId  String
+  request    PurchaseRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  approverId String?
+  status     String
+  reason     String?
+  createdAt  DateTime        @default(now())
+}
+
+model ChatConversation {
+  id             String        @id @default(cuid())
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String?
+  title          String?
+  messages       ChatMessage[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+model ChatMessage {
+  id             String           @id @default(cuid())
+  conversationId String
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  metadata       Json?
+  createdAt      DateTime         @default(now())
+}
+
+model VendorSearch {
+  id        String               @id @default(cuid())
+  userId    String?
+  query     String
+  location  String
+  provider  String
+  results   VendorSearchResult[]
+  createdAt DateTime             @default(now())
+}
+
+model VendorSearchResult {
+  id       String       @id @default(cuid())
+  searchId String
+  search   VendorSearch @relation(fields: [searchId], references: [id], onDelete: Cascade)
+  vendorId String?
+  placeId  String?
+  payload  Json
+}
+
+model AIActionLog {
+  id             String   @id @default(cuid())
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id])
+  conversationId String?
+  action         String
+  resourceType   String?
+  resourceId     String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+}

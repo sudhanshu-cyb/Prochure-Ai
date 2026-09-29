@@ -32,34 +32,37 @@ class AIService:
             
         try:
             prompt = AIService._build_prompt(pr_details, vendors, recommended_vendor)
-            
-            url = "https://api.openai.com/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {Config.AI_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": "gpt-4o-mini",
-                "messages": [
-                    {
-                        "role": "system", 
-                        "content": "You are a procurement AI assistant. Explain procurement recommendations based purely on the provided scores, prices, and risks. Do NOT fabricate confidence scores. Do NOT hallucinate new scores or facts. Be concise, professional, and explain why the top vendor was chosen and why alternatives were rejected."
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.3,
-                "max_tokens": 500
-            }
-            
-            logger.info("Calling AI API for explanation...")
-            response = requests.post(url, headers=headers, json=payload, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                return data['choices'][0]['message']['content'].strip()
+            system_prompt = "You are a procurement AI assistant. Explain recommendations only from the provided scores, prices, and risks. Do not invent facts or scores. Be concise and professional."
+            logger.info("Calling configured AI provider: %s", Config.AI_PROVIDER)
+
+            if Config.AI_PROVIDER == 'gemini':
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent"
+                payload = {
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 500}
+                }
+                response = requests.post(
+                    url, params={"key": Config.GEMINI_API_KEY or Config.AI_API_KEY},
+                    headers={"Content-Type": "application/json"}, json=payload, timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return data['candidates'][0]['content']['parts'][0]['text'].strip()
             else:
-                logger.error(f"AI API returned {response.status_code}: {response.text}")
-                return fallback_explanation
+                url = "https://api.openai.com/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {Config.AI_API_KEY}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
+                    "temperature": 0.3, "max_tokens": 500
+                }
+                response = requests.post(url, headers=headers, json=payload, timeout=10)
+                if response.status_code == 200:
+                    return response.json()['choices'][0]['message']['content'].strip()
+
+            logger.error("AI provider returned %s: %s", response.status_code, response.text[:500])
+            return fallback_explanation
                 
         except Exception as e:
             logger.error(f"AI Service Exception: {e}")

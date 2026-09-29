@@ -1,6 +1,6 @@
-# ProcureAI 🤖💼
+# PROCUREAI
 
-ProcureAI is an intelligent, automated procurement management system built for the modern enterprise. It connects a frontend portal with an underlying ERP system (Odoo) to evaluate vendors, calculate deterministic risk, request multi-tier approvals, and generate AI-driven natural language explanations for purchasing decisions.
+PROCUREAI is an intelligent, automated procurement management system built for the modern enterprise. It connects a frontend portal with an underlying ERP system (Odoo) to evaluate vendors, calculate deterministic risk, request multi-tier approvals, and generate AI-driven natural language explanations for purchasing decisions.
 
 ## 🚀 Getting Started
 
@@ -27,7 +27,14 @@ Start the Flask development server:
 ```bash
 python app.py
 ```
-Open `http://127.0.0.1:5000` in your web browser.
+The server uses `BACKEND_HOST` and `BACKEND_PORT` from `.env`. With the example
+configuration, open `http://127.0.0.1:8000` in your browser. The public landing
+page is at `/`; the authenticated workspace is at `/dashboard`.
+
+The backend reads `DATABASE_URL` for Prisma configuration, `GEMINI_API_KEY` and
+`GEMINI_MODEL` when `AI_PROVIDER=gemini`, and `GOOGLE_MAPS_API_KEY` for future
+map-enabled vendor workflows. Check non-secret integration state at
+`GET /api/integrations/status` after signing in.
 
 ---
 
